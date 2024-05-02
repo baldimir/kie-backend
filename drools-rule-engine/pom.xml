@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>org.kie</groupId>
+    <artifactId>kie-backend</artifactId>
+    <version>999-SNAPSHOT</version>
+  </parent>
+
+  <artifactId>drools-rule-engine</artifactId>
+  <packaging>pom</packaging>
+
+  <modules>
+    <module>drools-ruleunits</module>
+    <module>drools-wiring</module>
+    <module>drools-io</module>
+    <module>drools-core</module>
+    <module>drools-base</module>
+    <module>drools-commands</module>
+    <module>drools-kiesession</module>
+    <module>drools-ecj</module>
+    <module>drools-drl</module>
+    <module>drools-compiler</module>
+    <module>drools-mvel</module>
+    <module>drools-xml-support</module>
+    <module>drools-legacy-test-util</module>
+    <module>drools-tms</module>
+    <module>drools-beliefs</module>
+    <module>drools-serialization-protobuf</module>
+    <module>drools-traits</module>
+    <module>drools-verifier</module>
+    <module>drools-templates</module>
+    <module>drools-decisiontables</module>
+    <module>drools-model</module>
+    <module>drools-test-coverage</module>
+    <module>drools-scenario-simulation</module>
+    <module>drools-metric</module>
+    <module>drools-alphanetwork-compiler</module>
+    <module>drools-engine</module>
+    <module>drools-engine-classic</module>
+    <module>drools-impact-analysis</module>
+    <module>drools-retediagram</module>
+    <module>drools-fastutil</module>
+    <module>drools-reliability</module>
+    <module>drools-drlonyaml-parent</module>
+  </modules>
+
+</project>
