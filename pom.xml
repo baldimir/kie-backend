@@ -119,7 +119,7 @@
   <modules>
     <module>bom</module>
     <module>drools-build-parent</module>
-    <module>drools-rule-engine</module>
+    <module>drools-drl-engine</module>
 
     <module>kie-api</module>
     <module>kie-internal</module>

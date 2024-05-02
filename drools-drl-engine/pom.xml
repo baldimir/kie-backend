@@ -9,7 +9,7 @@
     <version>999-SNAPSHOT</version>
   </parent>
 
-  <artifactId>drools-rule-engine</artifactId>
+  <artifactId>drools-drl-engine</artifactId>
   <packaging>pom</packaging>
 
   <modules>
