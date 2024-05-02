@@ -1,0 +1,180 @@
+@Library('jenkins-pipeline-shared-libraries')_
+
+import org.kie.jenkins.MavenCommand
+
+droolsRepo = 'incubator-kie-drools'
+optaplannerRepo = 'incubator-kie-optaplanner'
+quickstartsRepo = 'incubator-kie-optaplanner-quickstarts'
+
+pipeline {
+    agent {
+        docker { 
+            image env.AGENT_DOCKER_BUILDER_IMAGE
+            args env.AGENT_DOCKER_BUILDER_ARGS
+            label util.avoidFaultyNodes()
+        }
+    }
+    environment {
+        OPTAPLANNER_CI_EMAIL_TO = credentials("${JENKINS_EMAIL_CREDS_ID}")
+    }
+    options {
+        timestamps()
+        timeout(time: 360, unit: 'MINUTES')
+        disableConcurrentBuilds(abortPrevious: true)
+    }
+    stages {
+        stage('Initialize') {
+            steps {
+                script {
+                    checkoutDroolsRepo()
+                    checkoutOptaplannerRepo()
+                    checkoutOptaplannerQuickstartsRepo()
+                }
+            }
+        }
+        stage('Build drools') {
+            steps {
+                script {
+                    configFileProvider([configFile(fileId: env.MAVEN_SETTINGS_CONFIG_FILE_ID, variable: 'MAVEN_SETTINGS_FILE')]){
+                        getMavenCommand(droolsRepo)
+                            .withProperty('quickly')
+                            .withSettingsXmlFile(MAVEN_SETTINGS_FILE)
+                            .run('clean install')
+                    }
+                }
+            }
+            post {
+                always {
+                    script {
+                        cleanContainers()
+                    }
+                }
+            }
+        }
+
+        stage('Retrieve drools snapshot version') {
+            steps {
+                script {
+                    dir(droolsRepo) {
+                        // query mvn to get the latest version
+                        env.DROOLS_VERSION = """${sh (
+                                script: 'mvn org.apache.maven.plugins:maven-help-plugin:3.2.0:evaluate -Dexpression=project.version -q -DforceStdout',
+                                returnStdout: true
+                            ).trim()}"""
+                        assert env.DROOLS_VERSION != ''
+                        echo "Drools version is: ${env.DROOLS_VERSION}"
+                    }
+                }
+            }
+        }
+
+        stage('Build optaplanner') {
+            steps {
+                script {
+                    configFileProvider([configFile(fileId: env.MAVEN_SETTINGS_CONFIG_FILE_ID, variable: 'MAVEN_SETTINGS_FILE')]){
+                        getMavenCommand(optaplannerRepo)
+                            .withProperty('maven.test.failure.ignore', true)
+                            .withProperty('version.org.drools', env.DROOLS_VERSION)
+                            .withSettingsXmlFile(MAVEN_SETTINGS_FILE)
+                            .run('clean install')
+                    }
+                }
+            }
+            post {
+                always {
+                    script {
+                        junit testResults: '**/target/surefire-reports/**/*.xml, **/target/failsafe-reports/**/*.xml', allowEmptyResults: true
+                        util.archiveConsoleLog()
+                        cleanContainers()
+                    }
+                }
+            }
+        }
+
+        stage('Build optaplanner-quickstarts') {
+            steps {
+                script {
+                    configFileProvider([configFile(fileId: env.MAVEN_SETTINGS_CONFIG_FILE_ID, variable: 'MAVEN_SETTINGS_FILE')]){
+                        getMavenCommand(quickstartsRepo)
+                            .withProperty('maven.test.failure.ignore', true)
+                            .withProperty('version.org.drools', env.DROOLS_VERSION)
+                            .withSettingsXmlFile(MAVEN_SETTINGS_FILE)
+                            .run('clean install')
+                    }
+                }
+            }
+            post {
+                always {
+                    script {
+                        cleanContainers()
+                    }
+                }
+            }
+        }
+    }
+    post {
+        unsuccessful {
+            sendErrorNotification()
+        }
+        cleanup {
+            script {
+                util.cleanNode()
+            }
+        }
+    }
+}
+
+void sendErrorNotification() {
+    String additionalInfo = """
+    **[${getBuildBranch()}] Optaplanner${NOTIFICATION_JOB_NAME ? " - ${NOTIFICATION_JOB_NAME}" : ''}**
+    cc @*drools-team*
+    """
+    mailer.sendMarkdownTestSummaryNotification("CI failures", [env.OPTAPLANNER_CI_EMAIL_TO], additionalInfo)
+}
+
+void checkoutOptaplannerRepo() {
+    dir(optaplannerRepo) {
+        checkout(githubscm.resolveRepository(optaplannerRepo, params.GIT_AUTHOR, getBuildBranch(), false, getGitAuthorCredsId()))
+    }
+}
+
+void checkoutOptaplannerQuickstartsRepo() {
+    // If the PR to OptaPlanner targets the 'main' branch or the `9.x` branch, we assume the branch 'development' for quickstarts.
+    String quickstartsChangeTarget = getBuildBranch() == 'main' || getBuildBranch() == '9.x'
+            ? 'development' : getBuildBranch()
+
+    dir(quickstartsRepo) {
+        checkout(githubscm.resolveRepository(quickstartsRepo, params.GIT_AUTHOR, quickstartsChangeTarget, false, getGitAuthorCredsId()))
+    }
+}
+
+void checkoutDroolsRepo() {
+    dir(droolsRepo) {
+        checkout(githubscm.resolveRepository(droolsRepo, 'apache', getDroolsBranch(), false, getGitAuthorCredsId()))
+    }
+}
+
+MavenCommand getMavenCommand(String directory) {
+    def mvnCmd = new MavenCommand(this, ['-fae', '-ntp'])
+                .inDirectory(directory)
+    if (env.BUILD_MVN_OPTS) {
+        mvnCmd.withOptions([ env.BUILD_MVN_OPTS ])
+    }
+    return mvnCmd
+}
+
+String getBuildBranch() {
+    return params.BUILD_BRANCH_NAME
+}
+
+String getDroolsBranch() {
+    return env['DROOLS_BRANCH'] ?: 'main'
+}
+
+String getGitAuthorCredsId() {
+    return env.GIT_AUTHOR_CREDS_ID
+}
+
+void cleanContainers() {
+    cloud.cleanContainersAndImages('docker')
+}

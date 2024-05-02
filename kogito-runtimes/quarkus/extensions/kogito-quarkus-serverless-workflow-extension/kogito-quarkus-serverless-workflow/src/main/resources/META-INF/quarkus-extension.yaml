@@ -1,0 +1,22 @@
+---
+name: SonataFlow Quarkus Extension
+description: Quarkus Extension to include the SonataFlow engine
+metadata:
+  keywords:
+    - "SonataFlow"
+    - "serverless workflow"
+    - "serverless"
+    - "workflows"
+    - "SW"
+    - "SWF"
+  guide: "https://quarkus.io/guides/sonataflow"
+  categories:
+    - "cloud"
+  status: "preview"
+  config:
+    - "kogito."
+  codestart:
+    name: "sonataflow-quarkus-codestart"
+    languages:
+      - "java"
+    artifact: "org.apache.kie.sonataflow:sonataflow-quarkus:codestarts:jar:${project.version}"

@@ -1,0 +1,567 @@
+import org.jenkinsci.plugins.workflow.libs.Library
+
+@Library('jenkins-pipeline-shared-libraries') _
+
+import org.kie.jenkins.MavenCommand
+import org.kie.jenkins.MavenStagingHelper
+
+deployProperties = [:]
+
+optaplannerRepository = 'incubator-kie-optaplanner'
+optaplannerFolder = 'optaplanner'
+quickstartsRepository = 'incubator-kie-optaplanner-quickstarts'
+quickstartsFolder = 'quickstarts'
+
+imageUtils = null
+
+pipeline {
+    agent {
+        docker { 
+            image env.AGENT_DOCKER_BUILDER_IMAGE
+            args env.AGENT_DOCKER_BUILDER_ARGS
+            label util.avoidFaultyNodes()
+        }
+    }
+
+    options {
+        timestamps()
+        timeout(time: 120, unit: 'MINUTES')
+        disableConcurrentBuilds(abortPrevious: true)
+    }
+
+    environment {
+        OPTAPLANNER_CI_EMAIL_TO = credentials("${JENKINS_EMAIL_CREDS_ID}")
+
+        PR_BRANCH_HASH = "${util.generateHash(10)}"
+
+        // Maven configuration
+        MAVEN_DEPLOY_LOCAL_DIR = "/tmp/maven_deploy_dir"
+    }
+
+    stages {
+        stage('Initialize') {
+            steps {
+                script {
+                    cleanWs(disableDeferredWipeout: true)
+
+                    if (params.DISPLAY_NAME) {
+                        currentBuild.displayName = params.DISPLAY_NAME
+                    }
+
+                    if (isRelease() || isCreatePr()) {
+                        // Verify version is set
+                        assert getProjectVersion()
+
+                        if (isRelease()) {
+                            // Verify if on right release branch
+                            assert getBuildBranch() == util.getReleaseBranchFromVersion(getProjectVersion())
+                        }
+                    }
+
+                    checkout scm // To make sure the repository containing the script is available on the Jenkins node.
+                    imageUtils = load '.ci/jenkins/scripts/imageUtils.groovy'
+                }
+            }
+            post {
+                success {
+                    script {
+                        setDeployPropertyIfNeeded('git.branch', getBuildBranch())
+                        setDeployPropertyIfNeeded('git.branchQuickstarts', getQuickStartsBranch())
+                        setDeployPropertyIfNeeded('git.author', getGitAuthor())
+                        setDeployPropertyIfNeeded('project.version', getProjectVersion())
+                        setDeployPropertyIfNeeded('release', isRelease())
+                    }
+                }
+            }
+        }
+
+        stage('Clone repositories') {
+            steps {
+                script {
+                    checkoutRepo(optaplannerRepository, optaplannerFolder)
+                    checkoutQuickstarts(quickstartsFolder)
+                }
+            }
+        }
+
+        stage('Prepare for PR') {
+            when {
+                expression { return isRelease() || isCreatePr() }
+            }
+            steps {
+                script {
+                    prepareForPR(optaplannerFolder)
+                    prepareForPR(quickstartsFolder)
+                }
+            }
+        }
+
+        stage('Update project version') {
+            when {
+                expression { return getProjectVersion() != '' }
+            }
+            steps {
+                script {
+                    if (getDroolsVersion()) {
+                        maven.mvnSetVersionProperty(getOptaplannerMavenCommand(), 'version.org.drools', getDroolsVersion())
+                    }
+                    maven.mvnVersionsSet(getOptaplannerMavenCommand(), getProjectVersion(), !isRelease())
+                    mavenCleanInstallOptaPlannerParents()
+                    updateQuickstartsVersions()
+                }
+            }
+        }
+
+        stage('Build OptaPlanner') {
+            steps {
+                script {
+                    configFileProvider([configFile(fileId: env.MAVEN_SETTINGS_CONFIG_FILE_ID, variable: 'MAVEN_SETTINGS_FILE')]){
+                        getOptaplannerMavenCommand()
+                                .withProperty('maven.test.failure.ignore', true)
+                                .withProperty('operator.image.build')
+                                .skipTests(params.SKIP_TESTS)
+                                .withSettingsXmlFile(MAVEN_SETTINGS_FILE)
+                                .run('clean install')
+                    }
+                    if (isRelease()) {
+                        updateAntoraYaml(optaplannerFolder)
+                    }
+                }
+            }
+            post {
+                always {
+                    script {
+                        archiveJUnitTestResults()
+                        util.archiveConsoleLog()
+                    }
+                }
+            }
+        }
+
+        stage('Build Quickstarts') {
+            steps {
+                script {
+                    configFileProvider([configFile(fileId: env.MAVEN_SETTINGS_CONFIG_FILE_ID, variable: 'MAVEN_SETTINGS_FILE')]){
+                        getOptaplannerQuickstartsMavenCommand()
+                                .withProperty('maven.test.failure.ignore', true)
+                                .skipTests(params.SKIP_TESTS)
+                                .withSettingsXmlFile(MAVEN_SETTINGS_FILE)
+                                .run('clean install')
+                    }
+                }
+            }
+            post {
+                always {
+                    script {
+                        archiveJUnitTestResults()
+                        util.archiveConsoleLog()
+                    }
+                }
+            }
+        }
+        stage('Deploy locally') {
+            steps {
+                script {
+                    runMavenDeploy(getOptaplannerMavenCommand(), optaplannerRepository)
+                }
+            }
+        }
+        stage('Deploy to repository') {
+            when {
+                expression { return  shouldDeployToRepository() }
+            }
+            steps {
+                script {
+                    withCredentials([usernamePassword(credentialsId: env.MAVEN_REPO_CREDS_ID, usernameVariable: 'REPOSITORY_USER', passwordVariable: 'REPOSITORY_TOKEN')]) {
+                        configFileProvider([configFile(fileId: env.MAVEN_SETTINGS_CONFIG_FILE_ID, variable: 'MAVEN_SETTINGS_FILE')]) {
+                            new MavenCommand(this)
+                                    .withSettingsXmlFile(MAVEN_SETTINGS_FILE)
+                                    .withProperty('wagon.source', "file://${getLocalDeploymentFolder(optaplannerRepository)}")
+                                    .withProperty('wagon.target', MAVEN_DEPLOY_REPOSITORY)
+                                    .withProperty('wagon.targetId', 'apache-snapshots-repository')
+                                    .withProperty('apache.snapshot.repository.username', REPOSITORY_USER)
+                                    .withProperty('apache.snapshot.repository.password', REPOSITORY_TOKEN)
+                                    .run("org.codehaus.mojo:wagon-maven-plugin:2.0.2:merge-maven-repos")
+                        }
+                    }
+                }
+            }
+        }
+
+//        stage('Upload artifacts to given repository') {
+//            when {
+//                expression { return isSpecificArtifactsUpload() }
+//            }
+//            steps {
+//                script {
+//                    // Deploy to specific repository with credentials
+//                    maven.uploadLocalArtifacts(env.MAVEN_REPO_CREDS_ID, getLocalDeploymentFolder(optaplannerRepository), getMavenRepoZipUrl())
+//                }
+//            }
+//        }
+        stage('Stage artifacts') {
+            when {
+                expression { return shouldStageArtifacts() }
+            }
+            steps {
+                script {
+                    // Stage release artifacts
+                    runMavenStage(getOptaplannerMavenCommand(), optaplannerRepository)
+                }
+            }
+        }
+
+        stage('Create PRs') {
+            when {
+                expression { return isRelease() || isCreatePr() }
+            }
+            steps {
+                script {
+                    commitAndCreatePR(optaplannerFolder, optaplannerRepository, getBuildBranch())
+                    commitAndCreatePR(quickstartsFolder, quickstartsRepository, getQuickStartsBranch())
+                }
+            }
+            post {
+                success {
+                    script {
+                        setDeployPropertyIfNeeded("${optaplannerRepository}.pr.source.uri", "https://github.com/${getGitAuthor()}/${optaplannerRepository}")
+                        setDeployPropertyIfNeeded("${optaplannerRepository}.pr.source.ref", getPRBranch())
+                        setDeployPropertyIfNeeded("${optaplannerRepository}.pr.target.uri", "https://github.com/${getGitAuthor()}/${optaplannerRepository}")
+                        setDeployPropertyIfNeeded("${optaplannerRepository}.pr.target.ref", getBuildBranch())
+                    }
+                }
+            }
+        }
+
+        stage('Push a temporary operator image to a registry') {
+            when {
+                expression { return isRelease() }
+            }
+            steps {
+                script {
+                    pushOperatorTemporaryImage()
+
+                    // Store image deployment information
+                    setDeployPropertyIfNeeded('operator.image.name', getOperatorImageName())
+                    setDeployPropertyIfNeeded('operator.image.tag', getOperatorImageTag())
+                    setDeployPropertyIfNeeded('operator.image.temporary_tag', getOperatorImageTemporaryTag())
+                }
+            }
+        }
+    }
+    post {
+        always {
+            script {
+                def propertiesStr = deployProperties.collect { entry -> "${entry.key}=${entry.value}" }.join('\n')
+                writeFile(text: propertiesStr, file: env.PROPERTIES_FILE_NAME)
+                archiveArtifacts(artifacts: env.PROPERTIES_FILE_NAME)
+            }
+        }
+        unsuccessful {
+            sendErrorNotification()
+        }
+        cleanup {
+            script {
+                util.cleanNode()
+            }
+        }
+    }
+}
+
+void sendErrorNotification() {
+    if (params.SEND_NOTIFICATION) {
+        String additionalInfo = "**[${getBuildBranch()}] Optaplanner - Deploy**"
+        mailer.sendMarkdownTestSummaryNotification("CI failures", [env.OPTAPLANNER_CI_EMAIL_TO], additionalInfo)
+    } else {
+        echo 'No notification sent per configuration'
+    }
+}
+
+List getIntegrationTestProfiles() {
+    return params.SKIP_INTEGRATION_TESTS ? [] : ['integration-tests']
+}
+
+void updateQuickstartsVersions() {
+    maven.mvnSetVersionProperty(getOptaplannerQuickstartsMavenCommand(), 'version.org.optaplanner', getProjectVersion())
+    maven.mvnVersionsUpdateParentAndChildModules(getOptaplannerQuickstartsMavenCommand(), getProjectVersion(), !isRelease())
+    gradleVersionsUpdate(quickstartsFolder, getProjectVersion())
+
+    if (isRelease()) {
+        dir(quickstartsFolder) {
+            // TODO: Remove the exclusion after the kubernetes demo is migrated to 9.
+            assert !sh(script:
+                    'grep -Rn "SNAPSHOT" --include={pom.xml,build.gradle} --exclude-dir=kubernetes | ' +
+                            'grep -v -e "1.0-SNAPSHOT" | ' +
+                            'cat', returnStdout: true)
+        }
+    }
+    if (isCreatePr()) {
+        dir(quickstartsFolder) {
+            // TODO: Remove the exclusion after the kubernetes demo is migrated to 9.
+            assert !sh(script:
+                    'grep -Rn "SNAPSHOT" --include={pom.xml,build.gradle} --exclude-dir=kubernetes | ' +
+                            'grep -v -e "${getProjectVersion()}" | ' +
+                            'cat', returnStdout: true)
+        }
+    }
+}
+
+void gradleVersionsUpdate(String folder, String newVersion) {
+    dir(folder) {
+        sh "find . -name build.gradle -exec sed -i -E 's/def optaplannerVersion = \"[^\"\\s]+\"/def optaplannerVersion = \"${newVersion}\"/' {} \\;"
+    }
+}
+
+void archiveJUnitTestResults() {
+    if (!skipUnitTests()) {
+        junit testResults: '**/target/surefire-reports/**/*.xml, **/target/failsafe-reports/**/*.xml', allowEmptyResults: true
+    }
+}
+
+void checkoutRepo(String repo, String dirName = repo) {
+    dir(dirName) {
+        deleteDir()
+        if (params.PR_TARGET_BRANCH) {
+            githubscm.checkoutIfExists(repo, getGitAuthor(), getBuildBranch(), 'apache', getFallbackBranch(repo), true)
+        } else {
+            checkout(githubscm.resolveRepository(repo, getGitAuthor(), getBuildBranch(), false, getGitAuthorCredsId()))
+        }
+    }
+}
+
+void checkoutQuickstarts(String dirName = quickstartsRepository) {
+    dir(dirName) {
+        deleteDir()
+        if (params.PR_TARGET_BRANCH) {
+            githubscm.checkoutIfExists(quickstartsRepository, getGitAuthor(), getBuildBranch(), 'apache', getQuickStartsBranch(), true)
+        } else {
+            checkout(githubscm.resolveRepository(quickstartsRepository, getGitAuthor(), getQuickStartsBranch(), false, getGitAuthorCredsId()))
+        }
+    }
+}
+
+String getFallbackBranch(String repo) {
+    def repositoryScm = githubscm.getRepositoryScm(repo, 'apache', params.PR_TARGET_BRANCH)
+    return repositoryScm ? params.PR_TARGET_BRANCH : 'main'
+}
+
+void prepareForPR(String folder) {
+    dir(folder) {
+        githubscm.createBranch(getPRBranch())
+    }
+}
+
+void commitAndCreatePR(String folder, String repo, String buildBranch) {
+    dir(folder) {
+        def commitMsg = "[${buildBranch}] Update project version to ${getProjectVersion()}"
+        def prBody = "Generated by build ${BUILD_TAG}: ${BUILD_URL}."
+        if (isRelease()) {
+            prBody += '\nPlease do not merge, it should be merged automatically after testing.'
+        } else {
+            prBody += '\nPlease review and merge.'
+        }
+        githubscm.setUserConfigFromCreds(getGitAuthorPushCredsId())
+        githubscm.commitChanges(commitMsg, {
+            githubscm.findAndStageNotIgnoredFiles('pom.xml')
+            githubscm.findAndStageNotIgnoredFiles('build.gradle')
+            githubscm.findAndStageNotIgnoredFiles('antora.yml')
+        })
+        githubscm.pushObject('origin', getPRBranch(), getGitAuthorPushCredsId())
+        deployProperties["${repo}.pr.link"] = isRelease() ?
+                githubscm.createPRWithLabels(commitMsg, prBody, buildBranch, ['DO_NOT_MERGE'] as String[], getGitAuthorCredsId()) :
+                githubscm.createPR(commitMsg, prBody, buildBranch, getGitAuthorCredsId())
+    }
+}
+
+void commitAndCreatePRIgnoringNpmRegistry(String folder, String repo, String buildBranch) {
+    dir(folder) {
+        sh 'sed \'s;repository.engineering.redhat.com/nexus/repository/;;\' -i */package-lock.json'
+        sh 'git add */package-lock.json'
+    }
+    commitAndCreatePR(folder, repo, buildBranch)
+}
+
+MavenCommand getMavenDefaultCommand() {
+    MavenCommand mvnCmd = new MavenCommand(this, ['-fae', '-ntp'])
+    if (env.MAVEN_DEPENDENCIES_REPOSITORY) {
+        mvnCmd.withDependencyRepositoryInSettings('deps-repo', env.MAVEN_DEPENDENCIES_REPOSITORY)
+    }
+    return mvnCmd
+}
+
+MavenCommand getOptaplannerMavenCommand() {
+    return getMavenDefaultCommand().inDirectory(optaplannerFolder).withProperty('full')
+}
+
+MavenCommand getOptaplannerQuickstartsMavenCommand() {
+    return getMavenDefaultCommand().inDirectory(quickstartsFolder).withProperty('full')
+}
+
+/**
+ * Builds the parent modules and the BOM so that project depending on these artifacts can resolve.
+ */
+void mavenCleanInstallOptaPlannerParents() {
+    configFileProvider([configFile(fileId: env.MAVEN_SETTINGS_CONFIG_FILE_ID, variable: 'MAVEN_SETTINGS_FILE')]){
+        getOptaplannerMavenCommand()
+                .skipTests(true)
+                .withOptions(['-U', '-pl org.optaplanner:optaplanner-build-parent,org.optaplanner:optaplanner-bom', '-am'])
+                .withSettingsXmlFile(MAVEN_SETTINGS_FILE)
+                .run('clean install')
+    }
+}
+
+void runMavenDeploy(MavenCommand mvnCmd, String localDeploymentId = '') {
+    mvnCmd = mvnCmd.clone()
+
+    if (localDeploymentId) {
+        mvnCmd.withLocalDeployFolder(getLocalDeploymentFolder(localDeploymentId))
+    } else if (env.MAVEN_DEPLOY_REPOSITORY) {
+        mvnCmd.withDeployRepository(env.MAVEN_DEPLOY_REPOSITORY)
+    }
+
+    configFileProvider([configFile(fileId: env.MAVEN_SETTINGS_CONFIG_FILE_ID, variable: 'MAVEN_SETTINGS_FILE')]){
+        mvnCmd
+          .withSettingsXmlFile(MAVEN_SETTINGS_FILE)
+          .skipTests(true)
+          .run('clean deploy')
+    }
+}
+
+String getMavenRepoZipUrl() {
+    return "${params.MAVEN_DEPLOY_REPOSITORY.replaceAll('/content/', '/service/local/').replaceFirst('/*$', '')}/content-compressed"
+}
+
+void runMavenStage(MavenCommand mvnCmd, String localDeployId) {
+    MavenStagingHelper stagingHelper = getStagingHelper(mvnCmd)
+    deployProperties.putAll(stagingHelper.stageLocalArtifacts(env.NEXUS_STAGING_PROFILE_ID, getLocalDeploymentFolder(localDeployId)))
+    stagingHelper.promoteStagingRepository(env.NEXUS_BUILD_PROMOTION_PROFILE_ID)
+}
+
+MavenStagingHelper getStagingHelper(MavenCommand mvnCmd) {
+    return new MavenStagingHelper(this, mvnCmd)
+            .withNexusReleaseUrl(env.NEXUS_RELEASE_URL)
+            .withNexusReleaseRepositoryId(env.NEXUS_RELEASE_REPOSITORY_ID)
+}
+
+String getLocalDeploymentFolder(String localDeployId) {
+    return "${env.MAVEN_DEPLOY_LOCAL_DIR}/${localDeployId}"
+}
+
+// Getters and Setters of params/properties
+
+boolean isSpecificArtifactsUpload() {
+    return env.MAVEN_DEPLOY_REPOSITORY && env.MAVEN_REPO_CREDS_ID && !isDeployDisabled()
+}
+
+boolean shouldStageArtifacts() {
+    return !isSpecificArtifactsUpload() && isRelease() && !env.MAVEN_DEPLOY_REPOSITORY && !isDeployDisabled()
+}
+
+boolean shouldDeployToRepository() {
+    return (env.MAVEN_DEPLOY_REPOSITORY || isNotTestingBuild()) && !isDeployDisabled()
+}
+
+boolean isNotTestingBuild() {
+    return getGitAuthor() == 'apache'
+}
+
+boolean isRelease() {
+    return env.RELEASE ? env.RELEASE.toBoolean() : false
+}
+
+boolean isCreatePr() {
+    return params.CREATE_PR
+}
+
+boolean skipUnitTests() {
+    return params.SKIP_TESTS
+}
+
+boolean skipIntegrationTests() {
+    return params.SKIP_INTEGRATION_TESTS
+}
+
+String getGitAuthor() {
+    // GIT_AUTHOR can be env or param
+    return "${GIT_AUTHOR}"
+}
+
+String getGitAuthorCredsId() {
+    return env.GIT_AUTHOR_CREDS_ID
+}
+
+String getGitAuthorPushCredsId() {
+    return env.GIT_AUTHOR_PUSH_CREDS_ID
+}
+
+String getBuildBranch() {
+    return params.BUILD_BRANCH_NAME
+}
+
+String getProjectVersion() {
+    return params.PROJECT_VERSION
+}
+
+String getDroolsVersion() {
+    return params.DROOLS_VERSION
+}
+
+String getPRBranch() {
+    return "${getProjectVersion()}-${env.PR_BRANCH_HASH}"
+}
+
+void setDeployPropertyIfNeeded(String key, def value) {
+    if (value != null && value != '') {
+        deployProperties[key] = value
+    }
+}
+
+String getQuickStartsBranch() {
+    return params.QUICKSTARTS_BUILD_BRANCH_NAME
+}
+
+void updateAntoraYaml(String directory) {
+    if (isNotTestingBuild()) {
+        echo "updateAntoraYaml for ${directory}"
+        dir(directory) {
+            sh './build/release/update_antora_yml.sh'
+        }
+    } else {
+        echo 'No updateAntoraYaml due to testing build'
+    }
+}
+
+/* OptaPlanner Operator */
+
+String getOperatorImageRegistry() {
+    return params.OPERATOR_IMAGE_REGISTRY
+}
+
+String getOperatorImageNamespace() {
+    return params.OPERATOR_IMAGE_NAMESPACE
+}
+
+String getOperatorImageName() {
+    return env.OPERATOR_IMAGE_NAME
+}
+
+String getOperatorImageTag() {
+    return params.OPERATOR_IMAGE_TAG ?: getProjectVersion()
+}
+
+String getOperatorImageTemporaryTag() {
+    return "${getOperatorImageTag()}-temporary"
+}
+
+void pushOperatorTemporaryImage() {
+    String localImage = "${getOperatorImageName()}:latest"
+    String temporaryImageTag = getOperatorImageTemporaryTag()
+    String temporaryImageFullName = imageUtils.getImageFullNameWithRegistry(getOperatorImageRegistry(),
+            getOperatorImageNamespace(), getOperatorImageName(), temporaryImageTag)
+    imageUtils.tagImage(localImage, temporaryImageFullName)
+    imageUtils.pushImage(temporaryImageFullName)
+}
+
+boolean isDeployDisabled() {
+    return env.DISABLE_DEPLOY.toBoolean()
+}

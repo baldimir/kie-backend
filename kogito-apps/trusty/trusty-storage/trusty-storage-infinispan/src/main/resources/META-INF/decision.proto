@@ -1,0 +1,20 @@
+package org.kie.kogito.trusty.storage.api.model.decision;
+
+/* @Indexed */
+message Decision {
+
+    /* @Field(store = Store.YES) */
+    optional string executionId = 1;
+
+    /* @Field(store = Store.YES)
+     * @SortableField
+     */
+    optional int64 executionTimestamp = 2;
+
+    optional string rawObject = 3;
+}
+
+/* @Indexed */
+message DMNModelWithMetadata {
+    optional string rawObject = 1;
+}

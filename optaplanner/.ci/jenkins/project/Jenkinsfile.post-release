@@ -1,0 +1,284 @@
+import org.jenkinsci.plugins.workflow.libs.Library
+
+@Library('jenkins-pipeline-shared-libraries')_
+
+import org.kie.jenkins.MavenCommand
+
+String optaplannerRepository = 'incubator-kie-optaplanner'
+String quickstartsRepository = 'incubator-kie-optaplanner-quickstarts'
+String stableBranchName = 'stable'
+
+pipeline {
+    agent {
+        docker { 
+            image env.AGENT_DOCKER_BUILDER_IMAGE
+            args env.AGENT_DOCKER_BUILDER_ARGS
+            label util.avoidFaultyNodes()
+        }
+    }
+
+    options {
+        timestamps()
+        timeout(time: 120, unit: 'MINUTES')
+        disableConcurrentBuilds(abortPrevious: true)
+    }
+
+    environment {
+        OPTAPLANNER_CI_EMAIL_TO = credentials("${JENKINS_EMAIL_CREDS_ID}")
+
+        PR_BRANCH_HASH = "${util.generateHash(10)}"
+    }
+
+    stages {
+        stage('Initialization') {
+            steps {
+                script {
+                    cleanWs(disableDeferredWipeout: true)
+
+                    if (params.DISPLAY_NAME) {
+                        currentBuild.displayName = params.DISPLAY_NAME
+                    }
+
+                    // Verify version is set and if on right release branch
+                    assert getProjectVersion()
+                    assert getBuildBranch() == util.getReleaseBranchFromVersion(getProjectVersion())
+                }
+            }
+        }
+        
+        stage('Prepare for post-release') {
+            steps {
+                script {
+                    dir(optaplannerRepository) {
+                        checkoutTag(optaplannerRepository, getProjectVersion(), stableBranchName)
+                    }
+                    dir(quickstartsRepository) {
+                        checkoutTag(quickstartsRepository, getGitTag(), stableBranchName)
+                    }
+                }
+            }
+        }
+
+        stage('Reset Quickstarts stable branch') {
+            when {
+                expression { return isStream9() }
+            }
+            steps {
+                script {
+                    dir(quickstartsRepository) {
+                        removeJbossNexusFromMavenAndGradle()
+                        commitAndForcePushBranch(quickstartsRepository, stableBranchName)
+                    }
+                }
+            }
+        }
+
+        stage('Upload OptaPlanner distribution from Quickstarts') {
+            steps {
+                script {
+                    configFileProvider([configFile(fileId: env.MAVEN_SETTINGS_CONFIG_FILE_ID, variable: 'MAVEN_SETTINGS_FILE')]){
+                        getMavenCommand()
+                            .inDirectory(optaplannerRepository)
+                            .withProperty('quickly')
+                            .withProperty('full')
+                            .withSettingsXmlFile(MAVEN_SETTINGS_FILE)
+                            .run('clean install')
+                        getMavenCommand()
+                            .inDirectory(quickstartsRepository)
+                            .skipTests(true)
+                            .withProperty('full')
+                            .withSettingsXmlFile(MAVEN_SETTINGS_FILE)
+                            .run('clean install')
+                    }
+                    uploadDistribution(quickstartsRepository)
+                }
+            }
+        }
+
+        // Optaplanner website is not migrated to Apache
+        // stage('Update OptaPlanner website') {
+        //     steps {
+        //         script {
+        //             final String websiteRepository = 'optaplanner-website'
+        //             String prLink = null
+        //             String prBranchName = "${getProjectVersion().toLowerCase()}-${env.PR_BRANCH_HASH}"
+        //             dir("$websiteRepository-pr") {
+        //                 checkoutRepo(websiteRepository, 'main') // there is no other branch
+        //                 githubscm.createBranch(prBranchName)
+
+        //                 // Update versions in links on the website and in the docs.
+        //                 sh "./build/update-versions.sh ${getProjectVersion()} ${getNextMinorSnapshotVersion(getProjectVersion())}"
+
+        //                 // Update the XSDs. OptaPlanner must be cloned and build with the full profile before.
+        //                 String optaplannerRoot = "${WORKSPACE}/${optaplannerRepository}"
+        //                 String optaplannerWebsiteModule = 'optaplanner-website-root'
+        //                 String optaplannerWebsiteXsd = "${optaplannerWebsiteModule}/content/xsd"
+        //                 String optaplannerWebsiteDocs = 'optaplanner-website-docs'
+        //                 sh "cp ${optaplannerRoot}/core/optaplanner-core-impl/target/classes/solver.xsd ${optaplannerWebsiteXsd}/solver/solver-${env.OPTAPLANNER_LATEST_STREAM}.xsd"
+        //                 sh "cp ${optaplannerRoot}/optaplanner-benchmark/target/classes/benchmark.xsd ${optaplannerWebsiteXsd}/benchmark/benchmark-${env.OPTAPLANNER_LATEST_STREAM}.xsd"
+
+        //                 // Add changed files, commit, open and merge PR
+        //                 prLink = commitAndCreatePR("Release OptaPlanner ${getProjectVersion()}",
+        //                         { sh "git add $optaplannerWebsiteXsd/\\*.xsd $optaplannerWebsiteModule/data/pom.yml $optaplannerWebsiteDocs/antora-playbook.yml" },
+        //                         prBranchName, 'main')
+        //             }
+        //             dir(websiteRepository) {
+        //                 checkoutRepo(websiteRepository, 'main')
+        //                 mergeAndPush(prLink, 'main')
+        //                 githubscm.removeRemoteBranch('origin', prBranchName, getGitAuthorPushCredsId())
+        //             }
+        //         }
+        //     }
+        // }
+    }
+    post {
+        unsuccessful {
+            sendErrorNotification()
+        }
+        cleanup {
+            script {
+                util.cleanNode()
+            }
+        }
+    }
+}
+
+void sendErrorNotification() {
+    mailer.sendMarkdownTestSummaryNotification('Post-release', "[${getBuildBranch()}] Optaplanner", [env.OPTAPLANNER_CI_EMAIL_TO])
+}
+
+//////////////////////////////////////////////////////////////////////////////
+// Getter / Setter
+//////////////////////////////////////////////////////////////////////////////
+
+boolean isNotTestingBuild() {
+    return getGitAuthor() == 'apache'
+}
+
+String getProjectVersion() {
+    return params.PROJECT_VERSION
+}
+
+String getNextMicroSnapshotVersion(String currentVersion) {
+    return util.getNextVersion(currentVersion, 'micro')
+}
+
+String getNextMinorSnapshotVersion(String currentVersion) {
+    return util.getNextVersion(currentVersion, 'minor')
+}
+
+String getGitTag() {
+    return params.GIT_TAG
+}
+
+String getBuildBranch() {
+    return params.BUILD_BRANCH_NAME
+}
+
+String getGitAuthor() {
+    return env.GIT_AUTHOR
+}
+
+String getGitAuthorCredsId() {
+    return env.GIT_AUTHOR_CREDS_ID
+}
+
+String getGitAuthorPushCredsId() {
+    return env.GIT_AUTHOR_PUSH_CREDS_ID
+}
+
+String getSnapshotBranch() {
+    return "${getNextMicroSnapshotVersion(getProjectVersion()).toLowerCase()}-${env.PR_BRANCH_HASH}"
+}
+
+//////////////////////////////////////////////////////////////////////////////
+// Git
+//////////////////////////////////////////////////////////////////////////////
+
+void checkoutRepo(String repo, String branch) {
+    deleteDir()
+    checkout(githubscm.resolveRepository(repo, getGitAuthor(), branch, false, getGitAuthorCredsId()))
+    // need to manually checkout branch since on a detached branch after checkout command
+    sh "git checkout ${branch}"
+}
+
+void checkoutTag(String repo, String tagName, String localBranchName = tagName) {
+    deleteDir()
+    checkout(githubscm.resolveRepository(repo, getGitAuthor(), getBuildBranch(), false, getGitAuthorCredsId()))
+    // Need to manually checkout branch since we are in 'detached HEAD' state after the git checkout command.
+    sh "git checkout tags/${tagName} -b ${localBranchName}"
+}
+
+void mergeAndPush(String prLink, String targetBranch) {
+    if (prLink != '') {
+        githubscm.mergePR(prLink, getGitAuthorCredsId())
+        githubscm.pushObject('origin', targetBranch, getGitAuthorPushCredsId())
+    }
+}
+
+String commitAndCreatePR(String commitMsg, Closure precommit, String localBranch, String targetBranch) {
+    def prBody = "Generated by build ${BUILD_TAG}: ${BUILD_URL}"
+    githubscm.setUserConfigFromCreds(getGitAuthorPushCredsId())
+    githubscm.commitChanges(commitMsg, precommit)
+    githubscm.pushObject('origin', localBranch, getGitAuthorPushCredsId())
+    return githubscm.createPR(commitMsg, prBody, targetBranch, getGitAuthorCredsId())
+}
+
+void commitAndForcePushBranch(String repo, String branch) {
+    githubscm.setUserConfigFromCreds(getGitAuthorPushCredsId())
+    githubscm.commitChanges("[${getBuildBranch()}] Update ${branch} to ${getProjectVersion()}", {
+        githubscm.findAndStageNotIgnoredFiles('pom.xml')
+        githubscm.findAndStageNotIgnoredFiles('build.gradle')
+    })
+    try {
+        forcePushBranch(branch)
+    }
+    catch (exception) {
+        println "[ERROR] Force push branch: ${branch} from repo : ${repo} failed with exception: ${exception}"
+        currentBuild.result = 'UNSTABLE'
+    }
+}
+
+void uploadDistribution(String directory) {
+    if (isNotTestingBuild()) {
+        echo "uploadDistribution for ${directory}"
+        dir(directory) {
+            withCredentials(bindings: [sshUserPrivateKey(credentialsId: 'optaplanner-filemgmt',
+                    keyFileVariable: 'SSH_KEY_JBOSS_FILEMGMT')]) {
+                // For testing, simulate connection via SSH:
+                // sh "ssh -i $SSH_KEY_JBOSS_FILEMGMT -oKexAlgorithms=+diffie-hellman-group1-sha1 optaplanner@filemgmt.jboss.org"
+                sh "./build/release/upload_distribution.sh ${getProjectVersion()} $SSH_KEY_JBOSS_FILEMGMT"
+            }
+        }
+    } else {
+        echo 'No uploadDistribution due to testing build'
+    }
+}
+
+MavenCommand getMavenCommand() {
+    mvnCmd = new MavenCommand(this, ['-fae'])
+    if (env.MAVEN_DEPENDENCIES_REPOSITORY) {
+        mvnCmd.withDependencyRepositoryInSettings('deps-repo', env.MAVEN_DEPENDENCIES_REPOSITORY)
+    }
+    return mvnCmd
+}
+
+void removeJbossNexusFromMavenAndGradle() {
+    sh "find . -name pom.xml -print0 | xargs -0 sed -i \':a;N;\$!ba;s/\\n *<repositories>.*<\\/repositories>//g\'"
+    sh "find . -name build.gradle -print0 | xargs -0 sed -i \':a;N;\$!ba;s/\\n *maven {[^{}]*mavenContent " +
+            "{[^{}]*snapshotsOnly[^{}]*}[^{}]*}//g\'"
+
+    assert !sh (script:
+            'grep -Rn "repository.jboss.org" --include={pom.xml,build.gradle} | ' +
+            'cat', returnStdout: true)
+}
+
+def forcePushBranch(String branch) {
+    withCredentials([usernamePassword(credentialsId: getGitAuthorPushCredsId(), usernameVariable: 'GIT_USERNAME', passwordVariable: 'GIT_PASSWORD')]) {
+        // Please leave the double-quote here. They are mandatory for the shell command to work correctly.
+        sh """
+            git config --local credential.helper \"!f() { echo username=\\$GIT_USERNAME; echo password=\\$GIT_PASSWORD; }; f\"
+            git push origin ${branch} --force
+        """
+    }
+}

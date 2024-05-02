@@ -1,0 +1,54 @@
+---
+openapi: 3.0.3
+info:
+  title: Generated API
+  version: "1.0"
+paths:
+  /:
+    post:
+      operationId: Do Operation
+      parameters:
+        - in: header
+          name: pepe
+          schema:
+            type: string
+          required: true
+        - in: query
+          name: unusedList
+          required: false
+          schema: 
+            type: array
+            items: 
+              type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MultiplicationOperation'
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  product:
+                    format: float
+                    type: number
+components:
+  schemas:
+    MultiplicationOperation:
+      type: object
+      required: [leftElement,rightElement]
+      properties:
+        leftElement:
+          format: float
+          type: number
+        rightElement:
+          format: float
+          type: number
+        unusedElement:
+          type: array
+          items:
+            type: string

@@ -1,0 +1,28 @@
+ecosystem:
+  main_project: optaplanner
+  projects:
+  - name: optaplanner
+    regexs:
+    - incubator-kie-opta.*
+    - opta.*
+  - name: kie-benchmarks
+    ignore_release: true
+    regexs:
+    - incubator-kie-benchmarks.*
+git:
+  branches:
+  - name: main
+    main_branch: true
+seed:
+  config_file:
+    git:
+      repository: incubator-kie-optaplanner
+      author:
+        name: apache
+        credentials_id: ASF_Cloudbees_Jenkins_ci-builds
+        push:
+          credentials_id: 84811880-2025-45b6-a44c-2f33bef30ad2
+      branch: main
+    path: .ci/jenkins/config/branch.yaml
+jenkins:
+  email_creds_id: OPTAPLANNER_CI_NOTIFICATION_EMAILS
