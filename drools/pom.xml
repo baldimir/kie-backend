@@ -4,15 +4,14 @@
 
   <modelVersion>4.0.0</modelVersion>
   <parent>
-    <groupId>org.apache</groupId>
-    <artifactId>apache</artifactId>
-    <version>30</version>
+    <groupId>org.kie</groupId>
+    <artifactId>kie-backend</artifactId>
+    <version>999-SNAPSHOT</version>
   </parent>
 
   <groupId>org.kie</groupId>
   <artifactId>drools-parent</artifactId>
   <packaging>pom</packaging>
-  <version>999-SNAPSHOT</version>
 
   <name>Drools :: Parent</name>
   <description>
