@@ -119,26 +119,21 @@
   <modules>
     <module>bom</module>
     <module>drools-build-parent</module>
+    <module>apis</module>
     <module>drools-drl-engine</module>
-
-    <module>kie-api</module>
-    <module>kie-internal</module>
     <module>kie-util</module>
     <module>kie-memory-compiler</module>
     <module>kie-test-util</module>
-    <module>drools-util</module>
     <module>drools-persistence</module>
-    <module>drools-examples</module>
     <module>kie-ci</module>
-    <module>drools-examples-api</module>
     <module>efesto</module>
     <module>kie-drl</module>
     <module>kie-dmn</module>
     <module>kie-pmml-trusty</module>
     <module>kie-maven-plugin</module>
     <module>kie-archetypes</module>
-    <module>drools-quarkus-extension</module>
-    <module>drools-docs</module>
+    <module>quarkus</module>
+    <module>springboot</module>
 
     <module>optaplanner</module>
     <module>kogito-runtimes</module>

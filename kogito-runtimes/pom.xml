@@ -139,7 +139,6 @@
     <module>jbpm</module>
     <module>kogito-codegen-modules</module>
     <module>kogito-test-utils</module>
-    <module>quarkus</module>
     <module>grafana-api</module>
     <module>addons</module>
     <module>kogito-workitems</module>
