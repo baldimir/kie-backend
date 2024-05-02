@@ -37,14 +37,14 @@
     </dependencySets>
     <fileSets>
         <fileSet>
-            <directory>${project.root.dir}/data-index/data-index-storage/data-index-storage-postgresql/src/main/resources/db/migration</directory>
+            <directory>${project.root.dir}/kogito-apps/data-index/data-index-storage/data-index-storage-postgresql/src/main/resources/db/migration</directory>
             <outputDirectory>postgresql/data-index</outputDirectory>
             <includes>
                 <include>*.sql</include>
             </includes>
         </fileSet>
         <fileSet>
-            <directory>${project.root.dir}/data-index/data-index-storage/data-index-storage-oracle/src/main/resources/db/migration</directory>
+            <directory>${project.root.dir}/kogito-apps/data-index/data-index-storage/data-index-storage-oracle/src/main/resources/db/migration</directory>
             <outputDirectory>oracle/data-index</outputDirectory>
             <includes>
                 <include>*.sql</include>
@@ -52,7 +52,7 @@
         </fileSet>
         <!-- Job Service DDLs - Flyway scripts -->
         <fileSet>
-            <directory>${project.root.dir}/jobs-service/jobs-service-postgresql-common/src/main/resources/db/jobs-service</directory>
+            <directory>${project.root.dir}/kogito-apps/jobs-service/jobs-service-postgresql-common/src/main/resources/db/jobs-service</directory>
             <outputDirectory>postgresql/jobs-service</outputDirectory>
             <includes>
                 <include>*.sql</include>
@@ -61,7 +61,7 @@
     </fileSets>
     <files>
         <file>
-            <source>${project.root.dir}/persistence-commons/persistence-commons-postgresql/src/main/resources/cache_entity_create.sql</source>
+            <source>${project.root.dir}/kogito-apps/persistence-commons/persistence-commons-postgresql/src/main/resources/cache_entity_create.sql</source>
             <outputDirectory>postgresql/trusty</outputDirectory>
             <destName>trusty_service_create.sql</destName>
         </file>

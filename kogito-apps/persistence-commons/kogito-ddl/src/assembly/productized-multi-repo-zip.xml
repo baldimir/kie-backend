@@ -37,7 +37,7 @@
     </dependencySets>
     <fileSets>
         <fileSet>
-            <directory>${project.root.dir}/data-index/data-index-storage/data-index-storage-postgresql/src/main/resources/db/migration</directory>
+            <directory>${project.root.dir}/kogito-apps/data-index/data-index-storage/data-index-storage-postgresql/src/main/resources/db/migration</directory>
             <outputDirectory>postgresql/data-index</outputDirectory>
             <includes>
                 <include>*.sql</include>
@@ -45,7 +45,7 @@
         </fileSet>
         <!-- Job Service DDLs - Flyway scripts -->
         <fileSet>
-            <directory>${project.root.dir}/jobs-service/jobs-service-postgresql-common/src/main/resources/db/jobs-service</directory>
+            <directory>${project.root.dir}/kogito-apps/jobs-service/jobs-service-postgresql-common/src/main/resources/db/jobs-service</directory>
             <outputDirectory>postgresql/jobs-service</outputDirectory>
             <includes>
                 <include>*.sql</include>

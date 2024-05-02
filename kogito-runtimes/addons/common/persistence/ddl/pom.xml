@@ -34,7 +34,7 @@
   <packaging>pom</packaging>
 
   <properties>
-    <path.to.persistence.modules>${project.root.dir}/addons/common/persistence</path.to.persistence.modules>
+    <path.to.persistence.modules>${project.root.dir}/kogito-runtimes/addons/common/persistence</path.to.persistence.modules>
     <db.scripts.descriptor>src/assembly/db-scripts.xml</db.scripts.descriptor>
   </properties>
 
