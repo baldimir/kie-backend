@@ -16,6 +16,9 @@
     <module>kie-api</module>
     <module>kie-internal</module>
     <module>drools-util</module>
+    <module>kie-util</module>
+    <module>kie-test-util</module>
+    <module>efesto</module>
   </modules>
 
 </project>

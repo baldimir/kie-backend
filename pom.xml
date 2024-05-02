@@ -120,16 +120,13 @@
     <module>bom</module>
     <module>drools-build-parent</module>
     <module>apis</module>
-    <module>drools-drl-engine</module>
-    <module>kie-util</module>
+    <module>drl-rule-engine</module>
     <module>kie-memory-compiler</module>
-    <module>kie-test-util</module>
-    <module>drools-persistence</module>
+    <module>persistence</module>
     <module>kie-ci</module>
-    <module>efesto</module>
     <module>kie-drl</module>
-    <module>kie-dmn</module>
-    <module>kie-pmml-trusty</module>
+    <module>dmn-rule-engine</module>
+    <module>pmml-engine</module>
     <module>kie-maven-plugin</module>
     <module>kie-archetypes</module>
     <module>quarkus</module>
